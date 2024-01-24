@@ -76,12 +76,9 @@ class Encoder(nn.Module):
     
     def forward(self, text):
         words = text.split()
-        
         state_h, state_c = self.init_state(len(words))
         
-        
         for i in range(0, len(text)):
-            print("GGGGG")
             x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
             print(words[i:], x.shape)
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
@@ -116,14 +113,12 @@ class Decoder(nn.Module):
     
     def forward(self, text):
         words = text.split()
-        
         state_h, state_c = self.init_state(len(words))
         
         new_words = []
         
         for i in range(0, len(words)):
             x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
-            
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
             last_word_logits = y_pred[0][-1]
             p = torch.nn.functional.softmax(last_word_logits, dim=0).detach().numpy()
