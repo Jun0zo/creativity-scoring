@@ -1,2 +1,4 @@
 pretrained
-results
+results/
+data/
+__pycache__/
