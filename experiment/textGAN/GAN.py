@@ -8,57 +8,43 @@ from utils.helpers import truncated_normal_
 
 
 
-
 class Generator(nn.Module):
-    def __init__(self, embedding_dim, hidden_dim, vocab_size, max_seq_len, padding_idx, device='cpu'):
+    def __init__(self, encoder, decoder, output_size):
         super(Generator, self).__init__()
-        
-        self.hidden_dim = hidden_dim
-        self.embedding_dim = embedding_dim
-        self.max_seq_len = max_seq_len
-        self.vocab_size = vocab_size
-        self.padding_idx = padding_idx
-        
-        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=padding_idx)
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, bidirectional=True)
-        self.lstm2out = nn.Linear(hidden_dim * 2, vocab_size)
-        self.softmax = nn.LogSoftmax(dim=-1)
-        
-        self._init_params()
-        
-    def forward(self, inp, hidden, need_hidden=False):
-        emb = self.embedding(inp)
-        if len(inp.size()) == 1:
-            emb = emb.unsqueeze(1)
-        
-        print("================ start =====================")
-        print('emb size', emb.size())
-        out, hidden = self.lstm(emb, hidden)
-        print('out bef size', out.size())
-        out = out.contiguous().view(-1, out.size(-1))
-        print('out after size', out.size())
-        
-        out = self.lstm2out(out)
-        pred = self.softmax(out)
-        print("pred size ", pred.size())
-        
-        print("================ end =====================")
-        if need_hidden:
-            return pred, hidden
-        else:
-            return pred
+        self.encoder = encoder
+        self.decoder = decoder
+        self.output_size = output_size
 
-    def _init_params(self):
-        for param in self.parameters():
-            if param.requires_grad and len(param.shape) > 0:
-                stddev = 1. / math.sqrt(param.shape[0])
-                if cfg.gen_init == 'uniform':
-                    torch.nn.init.uniform_(param, a=-0.05, b=0.05)
-                elif cfg.gen_init == 'normal':
-                    torch.nn.init.normal_(param, std=stddev)
-                elif cfg.gen_init == 'truncated_normal':
-                    truncated_normal_(param, std=stddev)
-                    
+    def forward(self, input_seq, mask_indices):
+        batch_size = input_seq.size(0)
+        max_seq_len = input_seq.size(1)
+        
+        # 인코더의 초기 은닉 상태
+        encoder_hidden = self.encoder.initHidden()
+        encoder_hidden = (encoder_hidden[0].repeat(1, batch_size, 1),
+                          encoder_hidden[1].repeat(1, batch_size, 1))
+        
+        # 인코더를 통과
+        encoder_outputs, encoder_hidden = self.encoder(input_seq, encoder_hidden)
+        
+        # 디코더의 입력을 준비 (마스크된 위치에만 MASK_TOKEN_INDEX를 넣는다)
+        decoder_input = input_seq.clone()
+        decoder_input[mask_indices] = MASK_TOKEN_INDEX
+        
+        # 디코더의 초기 상태는 인코더의 최종 상태
+        decoder_hidden = encoder_hidden
+        
+        # 마스크된 위치에 대해서만 디코딩
+        outputs = torch.zeros(batch_size, max_seq_len, self.output_size)
+        for i in range(max_seq_len):
+            is_masked = mask_indices[:, i]  # 현재 인덱스가 마스크된 인덱스인지 확인
+            if is_masked.any():
+                decoder_output, decoder_hidden = self.decoder(
+                    decoder_input[:, i], decoder_hidden
+                )
+                outputs[is_masked, i, :] = decoder_output[is_masked, :]
+        
+        return outputs
                     
 class Discriminator(nn.Module):
     def __init__(self, embed_dim, vocab_size, filter_sizes, num_filters, padding_idx, dropout=0.2, device='cpu'):
