@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from collections import Counter
+import torch.optim as optim
+import torch.nn.functional as F
 
 # LSTM 설정
 input_size = 10  # 입력 크기
@@ -71,16 +73,19 @@ class Encoder(nn.Module):
         
     def one_step(self, x, prev_state):
         embed = self.embedding(x)
+        print('embed', embed.shape, prev_state[0].shape, prev_state[1].shape)
         output, (state_h, state_c) = self.lstm(embed, prev_state)
         return output, (state_h, state_c)
     
     def forward(self, text):
         words = text.split()
-        state_h, state_c = self.init_state(len(words))
+        state_h, state_c = self.init_state(1) # (len(words))
         
-        for i in range(0, len(text)):
-            x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
-            print(words[i:], x.shape)
+        for i in range(0, len(words)):
+            # x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
+            print(self.dataset.word_to_index[words[i]])
+            x = torch.tensor([[self.dataset.word_to_index[words[i]]]])
+            print('new', words[i], x.shape)
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
             
         return state_h, state_c
@@ -111,14 +116,17 @@ class Decoder(nn.Module):
         logits = self.fc(output)
         return logits, (state_h, state_c)
     
-    def forward(self, text):
+    def forward(self, text, state_h=None, state_c=None):
         words = text.split()
-        state_h, state_c = self.init_state(len(words))
+        if state_h is None:
+            state_h, state_c = self.init_state(1)
         
         new_words = []
         
+        
         for i in range(0, len(words)):
-            x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
+            # x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
+            x = torch.tensor([[self.dataset.word_to_index[words[i]]]])
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
             last_word_logits = y_pred[0][-1]
             p = torch.nn.functional.softmax(last_word_logits, dim=0).detach().numpy()
@@ -141,15 +149,40 @@ class Ganerator:
         
     def predict(self, text):
         state_h, state_c = self.encoder(text)
-        logits, (state_h, state_c) = self.decoder(text)
-        return logits, (state_h, state_c)
+        words = self.decoder(text, state_h, state_c)
+    
+        print(words)
+        
+class Discriminator:
+    def __init__(self, dataset):
+        pass
+    
+    def forward(self):
+        pass
+    
+class TextGAN:
+    def __init__(self, dataset):
+        self.generator = Ganerator(dataset)
+        self.discriminator = Discriminator(dataset)
+        
+    def train(self):
+        pass
+    
+    def predict(self):
+        pass
 
 if __name__ == '__main__':
     dataset = Dataset()
     
-    generator = Ganerator(dataset)
-    generator.predict('think think, is this?')
+    textgan = TextGAN(dataset)
     
+    g_optimizer = optim.Adam(textgan.generator.parameters(), lr=0.001)
+    d_optimizer = optim.Adam(textgan.discriminator.parameters(), lr=0.001)
+    
+    d_criterion = nn.BCEWithLogitsLoss()
+    
+    textgan
+    # generator.predict('censored censored')
     
 
     # output_text = predict(dataset, model, text='think think, is this?')
