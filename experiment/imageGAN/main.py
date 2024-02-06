@@ -5,8 +5,7 @@ import torchvision.datasets as dsets
 import torchvision.transforms as transforms
 import GAN
 import utils
-
-
+import matplotlib.pyplot as plt
 
 
 def run_epoch(generator, discriminator, _optimizer_g, _optimizer_d, batch_size, d_noise, device):
@@ -94,6 +93,7 @@ if __name__ == "__main__":
     p_real_trace = []
     p_fake_trace = []
 
+    plt.figure(figsize=(10, 5))
     # training
     for epoch in range(500):
         run_epoch(G, D, optimizer_g, optimizer_d, batch_size, d_noise, device)
@@ -102,6 +102,15 @@ if __name__ == "__main__":
         p_real_trace.append(p_real) 
         p_fake_trace.append(p_fake)
         
+        
+        
         if((epoch + 1) % 50 == 0):
             print("Epoch: {}, P(real): {:.4f}, P(fake): {:.4f}".format(epoch + 1, p_real, p_fake))
+            # plot
+            
             utils.imsave_grid(G(GAN.sample_z(16, device=device)).view(16, 1, 28, 28), name=str(epoch))
+    plt.plot(p_real_trace, label='D(x)')
+    plt.plot(p_fake_trace, label='D(G(z))') 
+    print(p_real_trace)  
+    print(p_fake_trace)
+    plt.savefig('result2.png')
