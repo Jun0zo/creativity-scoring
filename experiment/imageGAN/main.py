@@ -20,6 +20,9 @@ def run_epoch(generator, discriminator, _optimizer_g, _optimizer_d, batch_size, 
         p_real = discriminator(img_batch.view(-1, 28*28))
         p_fake = discriminator(generator(GAN.sample_z(batch_size, d_noise, device)))
         
+        print("=====================================")
+        print("p_real : ", p_real[0])
+        print("p_fake : ", p_fake[0])
         loss_real = -1 * torch.log(p_real)
         loss_fake = -1 * torch.log(1. - p_fake).mean()
         loss_d = (loss_real + loss_fake).mean()

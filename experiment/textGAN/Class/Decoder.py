@@ -3,8 +3,10 @@ import torch
 import torch.nn as nn
 
 class Decoder(nn.Module):
-    def __init__(self, tokenizer):
+    def __init__(self, tokenizer, device='cpu'):
         super(Decoder, self).__init__()
+        self.device = device
+        
         self.lstm_size = 128
         self.embedding_dim = 128
         self.num_layers = 1
@@ -34,12 +36,12 @@ class Decoder(nn.Module):
             
             if is_masked:
                 word_index = self.tokenizer.dataset.word_to_index[new_words[-1]]
-                x = torch.tensor([[word_index]])
+                x = torch.tensor([[word_index]]).to(self.device)
             else:
-                x = torch.tensor([[ids]])
+                x = torch.tensor([[ids]]).to(self.device)
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
             last_word_logits = y_pred[0][-1]
-            p = torch.nn.functional.softmax(last_word_logits, dim=0).detach().numpy()
+            p = torch.nn.functional.softmax(last_word_logits, dim=0).detach().cpu().numpy()
             word_index = np.random.choice(len(last_word_logits), p=p)
             new_words.append(self.tokenizer.dataset.index_to_word[word_index])
         
@@ -47,6 +49,6 @@ class Decoder(nn.Module):
     
     def init_state(self, sequence_length):
         return (
-            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
-            torch.zeros(self.num_layers, sequence_length, self.lstm_size),
+            torch.zeros(self.num_layers, sequence_length, self.lstm_size).to(self.device),
+            torch.zeros(self.num_layers, sequence_length, self.lstm_size).to(self.device),
         )
