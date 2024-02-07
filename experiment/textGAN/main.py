@@ -1,117 +1,97 @@
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+
 import torch.optim as optim
-import torchvision.datasets as dsets
-import torchvision.transforms as transforms
-import GAN
-import tokenizer
-import utils
+import random
+
+from Class.Dataset import Dataset
+from Class.GAN import TextGAN
+
+# LSTM 설정
+input_size = 10  # 입력 크기
+hidden_size = 5  # 은닉 상태 크기
+num_layers = 1  # LSTM 레이어 수
 
 
 
-
-
-
-def run_epoch(generator, discriminator, _optimizer_g, _optimizer_d, batch_size, d_noise, device):
-    generator.train()
-    discriminator.train()
+def run_epoch(generator, discriminator, g_optimizer, d_optimizer, d_criterion, dataset):
+    # generator.train()
+    # discriminator.train()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    for img_batch, label_batch in train_data_loader:
-        img_batch, label_batch = img_batch.to(device), label_batch.to(device)
+    
+    train_data_loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
+    k = 5
+    for text_batch in train_data_loader:
+        sentence = text_batch[0]
+        # print('tb :', text_batch)
+        # sentence = sentence.to(device)
+        sentence_length = len(sentence.split())
+        # Train Discriminator
+        d_optimizer.zero_grad()
         
-        _optimizer_d.zero_grad()
+        p_real = discriminator(sentence)
         
-        p_real = discriminator(img_batch.view(-1, 28*28))
-        p_fake = discriminator(generator(GAN.sample_z(batch_size, d_noise, device)))
+        random_indices = random.sample(range(1, sentence_length), k)
+        mask_array = [True if i in random_indices else False for i in range(sentence_length)]
+        
+        print("step 1")
+        a = generator(sentence, mask_array)
+        
+        print("step 2")
+        p_fake = discriminator(a)
+        print("fake : ", p_fake)
         
         loss_real = -1 * torch.log(p_real)
-        loss_fake = -1 * torch.log(1. - p_fake).mean()
+        loss_fake = -1 * torch.log(1. - p_fake + 1e-9).mean()
         loss_d = (loss_real + loss_fake).mean()
         
         loss_d.backward()
-        _optimizer_d.step()
+        d_optimizer.step()
         
-        _optimizer_g.zero_grad()
-        p_fake = discriminator(generator(GAN.sample_z(batch_size, d_noise, device)))
+        # Train Generator
+        g_optimizer.zero_grad()
+        p_fake = discriminator(generator(sentence, mask_array))
         
         loss_g = -1 * torch.log(p_fake).mean()
         loss_g.backward()
-        _optimizer_g.step()
+        g_optimizer.step()
+
+def predict(dataset, model, text, next_words=100):
+    model.eval()
+    
+    words = text.split()
+    state_h, state_c = model.init_state(len(words))
+    
+    for i in range(0, next_words):
+        x = torch.tensor([[dataset.word_to_index[w] for w in words[i:]]])
+        # print(x)
+        # print("x shape :",  x.shape)
+        y_pred, (state_h, state_c) = model(x, (state_h, state_c))
         
-def evaluate_model(generator, discriminator, batch_size, d_noise, device):
-    p_real, p_fake = 0., 0.
-    
-    generator.eval()
-    discriminator.eval()
-    
-    for img_batch, label_batch in test_data_loader:
-        img_batch, label_batch = img_batch.to(device), label_batch.to(device)
-        with torch.autograd.no_grad():
-            p_real += (torch.sum(discriminator(img_batch.view(-1, 28*28))).item()) / 10000.
-            p_fake += (torch.sum(discriminator(generator(GAN.sample_z(batch_size, d_noise, device)))).item()) / 10000.
-
-    return p_real, p_fake
+        last_word_logits = y_pred[0][-1]
+        p = torch.nn.functional.softmax(last_word_logits, dim=0).detach().numpy()
+        word_index = np.random.choice(len(last_word_logits), p=p)
+        words.append(dataset.index_to_word[word_index])
+    return words
 
 
-if __name__ == "__main__":
-    # cuda device settings
-    is_cuda = torch.cuda.is_available()
-    device = torch.device('cuda' if is_cuda else 'cpu')
-
-    batch_size = 200
-    d_noise = 100
-    d_hidden = 256
-
-    test_masked_data = "this is <MASK> movie"
-    test_correct_data = "this is a good movie"
+if __name__ == '__main__':
+    torch.autograd.set_detect_anomaly(True)
     
-    # embedding_dim, hidden_dim, vocab_size, max_seq_len, padding_idx
-    embedding_dim = 128
-    hidden_dim = 128
-    vocab_size = 10000
-    max_seq_len = 20
-    padding_idx = 0
-
-    embed_dim = 128
-    filter_sizes = [1]
-    num_filters = [3]
-    padding_idx = 0
+    dataset = Dataset()
     
-     #len(vocab)
+    textgan = TextGAN(dataset)
     
-    vocab = tokenizer.Vocab('data/training_set.csv')
+    g_optimizer = optim.Adam(textgan.generator.parameters(), lr=0.0001)
+    d_optimizer = optim.Adam(textgan.discriminator.parameters(), lr=0.0001)
     
-    vocab_size = vocab.get_len()
-    G = GAN.Generator(embedding_dim, hidden_dim, vocab_size, max_seq_len, padding_idx, device=device)
-    D = GAN.Discriminator(embed_dim, vocab_size, filter_sizes, num_filters, padding_idx, dropout=0.2, device=device)
+    d_criterion = nn.BCEWithLogitsLoss()
+     
+    run_epoch(textgan.generator, textgan.discriminator, g_optimizer, d_optimizer, d_criterion, dataset)
+    # generator.predict('censored censored')
     
-    criterion = nn.BCELoss()
-    
-    optimizer_g = optim.Adam(G.parameters(), lr=0.0002)
-    optimizer_d = optim.Adam(D.parameters(), lr=0.0002)
-    
-    print('tock + vocab' , vocab.text2vec('this is very very good'))
-    torch_n = torch.tensor(vocab.text2vec('this is very very good'))
-    h = torch.zeros(2, 1, 128)
-    c = torch.zeros(2, 1, 128)
-    hx = (h, c)
-    print(torch_n)
-    g = G(torch_n, hx)
-    print(g)
-    
-    D(torch_n)
-    
-    p_real_trace = []
-    p_fake_trace = []
-
-    # training
-    for epoch in range(500):
-        run_epoch(G, D, optimizer_g, optimizer_d, batch_size, d_noise, device)
-        p_real, p_fake = evaluate_model(G, D, batch_size, d_noise, device)
-        
-        # p_real_trace.append(p_real)
-        # p_fake_trace.append(p_fake)
-        
-        # if((epoch + 1) % 50 == 0):
-        #     print("Epoch: {}, P(real): {:.4f}, P(fake): {:.4f}".format(epoch + 1, p_real, p_fake))
-        #     utils.imsave_grid(G(GAN.sample_z(16, device=device)).view(16, 1, 28, 28), name=str(epoch))
+    # output_text = predict(dataset, model, text='think think, is this?')
+    # print(output_text)

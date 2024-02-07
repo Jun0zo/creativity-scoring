@@ -35,9 +35,15 @@ def run_epoch(generator, discriminator, g_optimizer, d_optimizer, d_criterion, d
         random_indices = random.sample(range(1, sentence_length), k)
         mask_array = [True if i in random_indices else False for i in range(sentence_length)]
         
-        p_fake = discriminator(generator(sentence))
+        print("step 1")
+        a = generator(sentence, mask_array)
+        
+        print("step 2")
+        p_fake = discriminator(a)
+        print("fake : ", p_fake)
+        
         loss_real = -1 * torch.log(p_real)
-        loss_fake = -1 * torch.log(1. - p_fake).mean()
+        loss_fake = -1 * torch.log(1. - p_fake + 1e-9).mean()
         loss_d = (loss_real + loss_fake).mean()
         
         loss_d.backward()
@@ -59,8 +65,8 @@ def predict(dataset, model, text, next_words=100):
     
     for i in range(0, next_words):
         x = torch.tensor([[dataset.word_to_index[w] for w in words[i:]]])
-        print(x)
-        print("x shape :",  x.shape)
+        # print(x)
+        # print("x shape :",  x.shape)
         y_pred, (state_h, state_c) = model(x, (state_h, state_c))
         
         last_word_logits = y_pred[0][-1]
@@ -97,6 +103,9 @@ class Dataset(torch.utils.data.Dataset):
             df = pd.read_csv(self.data_path)
             df.dropna(inplace=True)
             sentences = df['essay'].values
+            # preprocess
+            sentences = [sentence.lower() for sentence in sentences]
+            
             self.max_sequence_length = max([len(sentence.split()) for sentence in sentences])
             return sentences
         else:
@@ -123,7 +132,6 @@ class Tokenizer:
         
     def tokenize_sentence(self, sentence):
         seq = [self.dataset.word_to_index[word] for word in sentence.split()]
-        
         # add padding
         if len(seq) < self.dataset.max_sequence_length:
             seq = seq + [0] * (self.dataset.max_sequence_length - len(seq))
@@ -144,19 +152,21 @@ class Encoder(nn.Module):
         
     def one_step(self, x, prev_state):
         embed = self.embedding(x)
-        print('embed', embed.shape, prev_state[0].shape, prev_state[1].shape)
+        # print('embed', embed.shape, prev_state[0].shape, prev_state[1].shape)
         output, (state_h, state_c) = self.lstm(embed, prev_state)
         return output, (state_h, state_c)
     
     def forward(self, sentence, mask_array) :
+        print("============ Encoder ============")
         words = sentence.split()
         state_h, state_c = self.init_state(1) # (len(words))
         
         ids_list = self.tokenizer.tokenize_sentence(sentence)
         
-        for word, is_masked in zip(words, mask_array):
-            x = torch.tensor([[self.dataset.word_to_index[word]]])
-            print('new', word, x.shape)
+        for ids, is_masked in zip(ids_list, mask_array):
+            x = torch.tensor([[ids]])
+            # x = torch.tensor([[self.dataset.word_to_index[word]]])
+            # print('new', word, x.shape)
             y_pred, (state_h, state_c) = self.one_step(x, (state_h, state_c))
             
         return state_h, state_c
@@ -188,14 +198,13 @@ class Decoder(nn.Module):
         return logits, (state_h, state_c)
     
     def forward(self, sentence, mask_array, state_h=None, state_c=None):
+        print("============ Decoder ============")
         words = sentence.split()
         if state_h is None:
             state_h, state_c = self.init_state(1)
         
         new_words = []
-        
-        
-        for word, is_masked in enumerate(words, mask_array):
+        for word, is_masked in zip(words, mask_array):
             # x = torch.tensor([[self.dataset.word_to_index[w] for w in words[i:]]])
             if is_masked:
                 word_index = self.dataset.word_to_index[new_words[-1]]
@@ -223,12 +232,13 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
         self.encoder = Encoder(tokenizer)
         self.decoder = Decoder(tokenizer) 
-        
-    def predict(self, text):
-        state_h, state_c = self.encoder(text)
-        words = self.decoder(text, state_h, state_c)
     
-        print(words)
+    def forward(self, sentence, mask_array):
+        state_h, state_c = self.encoder(sentence, mask_array)
+        words = self.decoder(sentence, mask_array, state_h, state_c)
+        new_sentence = ' '.join(words)
+        print(new_sentence)
+        return new_sentence
         
 class Discriminator(nn.Module):
     def __init__(self, tokenizer):
@@ -243,7 +253,7 @@ class Discriminator(nn.Module):
         n_vocab = len(tokenizer.dataset.uniq_words)
         
         self.embedding = nn.Embedding(n_vocab, self.embedding_dim)
-        self.conv = nn.Conv1d(self.embedding_dim, 128, 5)
+        self.conv = nn.Conv1d(self.embedding_dim, 128, self.kernel_size)
         self.lstm = nn.LSTM(self.embedding_dim, self.lstm_size, self.num_layers)
         
         self.embedding = nn.Embedding(num_embeddings=n_vocab, embedding_dim=self.embedding_dim)
@@ -254,21 +264,40 @@ class Discriminator(nn.Module):
     
     def forward(self, sentence):
         words = sentence.split()
-        print('words lenth :', len(words))
-        inp = torch.tensor([[self.tokenizer.dataset.word_to_index[word] for word in words]])
-        feature = self._get_feature(inp)
-        pred = self.feature2out(feature)
+        # inp = torch.tensor([[self.tokenizer.dataset.word_to_index[word] for word in words]])
+        
+        ids_list = self.tokenizer.tokenize_sentence(sentence)
+        ids = torch.tensor([ids_list])
+        feature = self._get_feature(ids)
+        pred = self.fc(feature)
         return pred
     
     def _get_feature(self, inp):
         print("inp shape ", inp.shape)
         emb = self.embedding(inp)
+        
+        emb = emb.permute(0, 2, 1)
         print("emb shape ", emb.shape)
         feature = self.conv1d(emb)
-        print("feature shape ", feature.shape)
-        feature = self.lstm(feature)
+        
+        print("feature shape 1 (conv)", feature.shape)
+        
+        feature = feature.permute(0, 2, 1)
+        
+        prev_states = self._init_state(feature.shape)
+        print('shjape : ',prev_states[0].shape)
+        feature, (last_h, last_c) = self.lstm(feature, prev_states)
+        
+        
+        print("feature shape 2 (lstm)", feature.shape)
         
         return feature
+    
+    def _init_state(self, input_shape):
+        return (
+            torch.zeros((1, 1, 128)),
+            torch.zeros((1, 1, 128)),
+        )
     
 class TextGAN:
     def __init__(self, dataset):
@@ -282,12 +311,14 @@ class TextGAN:
         pass
 
 if __name__ == '__main__':
+    torch.autograd.set_detect_anomaly(True)
+    
     dataset = Dataset()
     
     textgan = TextGAN(dataset)
     
-    g_optimizer = optim.Adam(textgan.generator.parameters(), lr=0.001)
-    d_optimizer = optim.Adam(textgan.discriminator.parameters(), lr=0.001)
+    g_optimizer = optim.Adam(textgan.generator.parameters(), lr=0.0001)
+    d_optimizer = optim.Adam(textgan.discriminator.parameters(), lr=0.0001)
     
     d_criterion = nn.BCEWithLogitsLoss()
      
